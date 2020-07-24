@@ -174,6 +174,8 @@ export class RoomsService {
         multi.set(`game:${gameId}`, JSON.stringify(room.getState()));
 
         room.sendRoomDataToAll(this.redisAdapterService);
+
+        // TODO Remove room if no one is left and game has not started.
       },
     );
   }

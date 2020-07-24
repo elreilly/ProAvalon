@@ -79,6 +79,35 @@ export class RoomsGateway {
     };
   };
 
+  async passRoomEvent(
+    socket: SocketUser,
+    event: RoomSocketEvents,
+    gameId?: number,
+  ) {
+    if (!gameId) {
+      gameId = this.getSocketGameId(socket).gameId; // eslint-disable-line
+    }
+
+    this.logger.log(
+      `User ${socket.user.displayUsername} in room ${gameId} has sent event ${event}`,
+    );
+
+    if (gameId === -1) {
+      const msg: ChatResponse = {
+        text: 'You are not in a room!',
+        username: '',
+        timestamp: new Date(),
+        type: ChatResponseType.ERROR,
+      };
+      socket.emit(LobbySocketEvents.ALL_CHAT_TO_CLIENT, msg);
+      return false;
+    }
+
+    await this.roomsService.roomEvent(socket, gameId, event);
+
+    return true;
+  }
+
   @SubscribeMessage(RoomSocketEvents.ROOM_CHAT_TO_SERVER)
   async handleGameChat(socket: SocketUser, chatRequest: ChatRequest) {
     if (chatRequest.text) {
@@ -154,20 +183,17 @@ export class RoomsGateway {
       );
 
       // Send message to users
-      try {
-        const joinMessage = await transformAndValidate(ChatResponse, {
-          text: `${socket.user.displayUsername} has joined the room.`,
-          username: socket.user.displayUsername,
-          timestamp: new Date(),
-          type: ChatResponseType.PLAYER_JOIN_GAME,
-        });
+      const joinMessage = await transformAndValidate(ChatResponse, {
+        text: `${socket.user.displayUsername} has joined the room.`,
+        username: socket.user.displayUsername,
+        timestamp: new Date(),
+        type: ChatResponseType.PLAYER_JOIN_GAME,
+      });
 
-        this.server
-          .to(`game:${joinGame.id}`)
-          .emit(RoomSocketEvents.ROOM_CHAT_TO_CLIENT, joinMessage);
-      } catch (err) {
-        this.logger.error('Validation failed. Error: ', err);
-      }
+      this.server
+        .to(`game:${joinGame.id}`)
+        .emit(RoomSocketEvents.ROOM_CHAT_TO_CLIENT, joinMessage);
+
       return 'OK';
     }
     return `Game ${joinGame.id} not found.`;
@@ -177,80 +203,55 @@ export class RoomsGateway {
   async handleLeaveGame(socket: SocketUser) {
     const { gameId } = this.getSocketGameId(socket);
 
-    if (gameId !== -1) {
+    if (this.passRoomEvent(socket, RoomSocketEvents.LEAVE_ROOM, gameId)) {
       // Leave the socket io room
       socket.leave(`game:${gameId}`);
 
-      // Leave the game
-      this.roomsService.roomEvent(socket, gameId, RoomSocketEvents.LEAVE_ROOM);
-
-      this.logger.log(
-        `${socket.user.displayUsername} has left game ${gameId}.`,
-      );
-
       // Send message to users
-      try {
-        const chatResponse = await transformAndValidate(ChatResponse, {
-          text: `${socket.user.displayUsername} has left the room.`,
-          username: socket.user.displayUsername,
-          timestamp: new Date(),
-          type: ChatResponseType.PLAYER_LEAVE_GAME,
-        });
+      const chatResponse = await transformAndValidate(ChatResponse, {
+        text: `${socket.user.displayUsername} has left the room.`,
+        username: socket.user.displayUsername,
+        timestamp: new Date(),
+        type: ChatResponseType.PLAYER_LEAVE_GAME,
+      });
 
-        this.roomsService.storeChat(gameId, chatResponse);
+      this.roomsService.storeChat(gameId, chatResponse);
 
-        this.server
-          .to(`game:${gameId}`)
-          .emit(RoomSocketEvents.ROOM_CHAT_TO_CLIENT, chatResponse);
+      this.server
+        .to(`game:${gameId}`)
+        .emit(RoomSocketEvents.ROOM_CHAT_TO_CLIENT, chatResponse);
 
-        // TODO Remove room if no one is left and game has not started.
-      } catch (err) {
-        this.logger.error('Validation failed. Error: ', err);
-      }
       return 'OK';
     }
-    return `Game ${gameId} not found.`;
+
+    return 'ERROR (user is likely not in a room)';
   }
 
   @SubscribeMessage(RoomSocketEvents.SIT_DOWN)
   async handleSitDown(socket: SocketUser) {
-    const { gameId } = this.getSocketGameId(socket);
-
-    if (gameId === -1) {
-      return 'You aren\'t in a room';
+    if (this.passRoomEvent(socket, RoomSocketEvents.SIT_DOWN)) {
+      return 'OK';
     }
 
-    await this.roomsService.roomEvent(
-      socket,
-      gameId,
-      RoomSocketEvents.SIT_DOWN,
-    );
-
-    this.logger.log(
-      `${socket.user.displayUsername} has sat down in room ${gameId}!`,
-    );
-
-    return 'OK';
+    return 'ERROR (user is likely not in a room)';
   }
 
   @SubscribeMessage(RoomSocketEvents.STAND_UP)
   async handleStandUp(socket: SocketUser) {
-    const { gameId } = this.getSocketGameId(socket);
-
-    if (gameId === -1) {
-      return 'You aren\'t in a room';
+    if (this.passRoomEvent(socket, RoomSocketEvents.STAND_UP)) {
+      return 'OK';
     }
 
-    await this.roomsService.roomEvent(
-      socket,
-      gameId,
-      RoomSocketEvents.STAND_UP,
-    );
+    return 'ERROR (user is likely not in a room)';
+  }
 
-    this.logger.log(
-      `${socket.user.displayUsername} has stood up in room ${gameId}!`,
-    );
+  // TODO move this to games.gateway.ts later
+  @SubscribeMessage(RoomSocketEvents.START_GAME)
+  async handleStartGame(socket: SocketUser) {
+    if (this.passRoomEvent(socket, RoomSocketEvents.START_GAME)) {
+      return 'OK';
+    }
 
-    return 'OK';
+    return 'ERROR (user is likely not in a room)';
   }
 }

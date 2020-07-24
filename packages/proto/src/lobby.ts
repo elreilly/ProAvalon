@@ -29,6 +29,7 @@ export enum ChatResponseType {
   PLAYER_LEAVE_GAME = 'PLAYER_LEAVE_GAME',
   CREATE_GAME = 'CREATE_GAME',
   USER_COMMAND = 'USER_COMMAND',
+  ERROR = 'ERROR',
 }
 
 export class ChatResponse {

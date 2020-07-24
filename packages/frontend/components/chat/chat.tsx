@@ -29,8 +29,7 @@ const Chat = ({ messages, sendMessage }: IProps): ReactElement => {
   // store the debounced function in a hook so chat can be used twice on page
   const setScrollState = useRef(
     debounce((list): void => {
-      setHasScrolled(
-        list.scrollHeight - list.scrollTop - list.clientHeight >= 40,
+      setHasScrolled( list.scrollHeight - list.scrollTop - list.clientHeight >= 40,
       );
     }, 150),
   ).current;
@@ -98,7 +97,7 @@ const Chat = ({ messages, sendMessage }: IProps): ReactElement => {
           ul {
             list-style: none;
             margin: 0;
-            padding: 0 1rem;
+            padding: 1rem 1rem;
             height: 0;
             flex: 1 1 auto;
             overflow-y: auto;

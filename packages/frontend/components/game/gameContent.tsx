@@ -1,6 +1,6 @@
 import { ReactElement } from 'react';
 import { useSelector } from 'react-redux';
-import { RoomSocketEvents } from '@proavalon/proto/room';
+import { RoomSocketEvents, RoomData, RoomState } from '@proavalon/proto/room';
 import { RootState } from '../../store';
 import { GameButton } from './gameButton';
 
@@ -11,33 +11,61 @@ type Props = {
   game: {};
 };
 
-const buttonActions = {
-  waiting: {
-    green: (): void => {
-      socket.emit(RoomSocketEvents.SIT_DOWN);
-    },
-    red: (): void => {
-      socket.emit(RoomSocketEvents.STAND_UP);
-    },
-  },
-  game: {
-    green: undefined,
-    red: undefined,
-  },
-  finished: {
-    green: undefined,
-    red: undefined,
-  },
-};
+interface IButtonSettings {
+  green: { text: string; emit?: () => void };
+  red: { text: string; emit?: () => void };
+}
 
-// const buttonText = (roomData: RoomData) => {
-//
-// }
+const getButtonSettings = (
+  roomData: RoomData,
+  displayUsername?: string,
+): IButtonSettings => {
+  // Waiting
+  if (roomData.state === RoomState.waiting) {
+    // TODO Use the host name in the future once state machine starts updating it
+    // Host
+    if (
+      displayUsername &&
+      roomData.playerData.length >= 1 &&
+      roomData.playerData[0].displayUsername === displayUsername
+    ) {
+      return {
+        green: {
+          text: 'Start',
+          emit: (): void => socket.emit(RoomSocketEvents.START_GAME),
+        },
+        red: {
+          text: 'Kick',
+          // TODO Change this with kick emit later
+          emit: (): void => socket.emit(RoomSocketEvents.STAND_UP),
+        },
+      };
+    }
+    return {
+      green: {
+        text: 'Join',
+        emit: (): void => socket.emit(RoomSocketEvents.SIT_DOWN),
+      },
+      red: { text: 'N/A', emit: undefined },
+    };
+  }
+
+  // Default
+  return {
+    green: { text: 'N/A', emit: undefined },
+    red: { text: 'N/A', emit: undefined },
+  };
+};
 
 const GameContent = ({ className }: Props): ReactElement => {
   // const [selectedPlayers, setSelectedPlayers] = useState([]);
+  const displayUsername = useSelector(
+    (state: RootState) => state.user?.displayName,
+  );
   const roomData = useSelector((state: RootState) => state.room);
   const roomDataString = JSON.stringify(roomData, null, 4);
+
+  const buttonSettings = getButtonSettings(roomData, displayUsername);
 
   return (
     <div className={`${className} container`}>
@@ -48,14 +76,14 @@ const GameContent = ({ className }: Props): ReactElement => {
 
       <div className="buttonHolder">
         <GameButton
-          text="Join"
+          text={buttonSettings.green.text}
           type="green"
-          event={buttonActions[roomData.state].green}
+          event={buttonSettings.green.emit}
         />{' '}
         <GameButton
-          text="N/A"
+          text={buttonSettings.red.text}
           type="red"
-          event={buttonActions[roomData.state].red}
+          event={buttonSettings.red.emit}
         />
       </div>
 
