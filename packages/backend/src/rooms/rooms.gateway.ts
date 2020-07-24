@@ -3,7 +3,7 @@ import {
   WebSocketServer,
   SubscribeMessage,
 } from '@nestjs/websockets';
-import { Logger } from '@nestjs/common';
+import { Logger, createParamDecorator, ExecutionContext } from '@nestjs/common';
 import { Server } from 'socket.io';
 import { transformAndValidate } from '@proavalon/proto';
 import {
@@ -21,6 +21,60 @@ import {
 import { RoomsService } from './rooms.service';
 import { SocketUser } from '../users/users.socket';
 import { CommandsService } from '../commands/commands.service';
+
+interface IRoomInfo {
+  redisKey: string;
+  id: number;
+}
+
+export const RoomInfo = createParamDecorator(
+  (_: unknown, ctx: ExecutionContext): IRoomInfo => {
+    const socket = ctx.switchToWs().getClient();
+
+    const gameRooms = Object.keys(socket.rooms).filter((room) =>
+      room.includes('game'),
+    );
+
+    // If they have no rooms, check for their last roomId
+    if (gameRooms.length === 0) {
+      if (!socket.lastRoomId) {
+        // this.logger.warn(
+        //   `${socket.user.displayUsername} does not have a single joined game. They are currently in: ${gameRooms}`,
+        // );
+        return {
+          redisKey: '-1',
+          id: -1,
+        };
+      }
+
+      return {
+        redisKey: `game:${socket.lastRoomId}`,
+        id: socket.lastRoomId,
+      };
+    }
+
+    // If they have one joined socket room
+    if (gameRooms.length === 1) {
+      // socket.io-redis room name: 'game:<id>'
+      const redisKey = gameRooms[0];
+      const id = parseInt(redisKey.replace('game:', ''), 10);
+
+      return {
+        redisKey,
+        id,
+      };
+    }
+
+    // If we reach here then theres not much we can do.
+    // this.logger.warn(
+    //   `${socket.user.displayUsername} does not have a single joined game. They are currently in: ${gameRooms}`,
+    // );
+    return {
+      redisKey: '-1',
+      id: -1,
+    };
+  },
+);
 
 @WebSocketGateway()
 export class RoomsGateway {
@@ -78,36 +132,6 @@ export class RoomsGateway {
       gameId: -1,
     };
   };
-
-  async passRoomEvent(
-    socket: SocketUser,
-    event: RoomSocketEvents,
-    gameId?: number,
-  ) {
-    if (!gameId) {
-      gameId = this.getSocketGameId(socket).gameId; // eslint-disable-line
-    }
-
-    this.logger.log(
-      `User ${socket.user.displayUsername} in room ${gameId} has sent event ${event}`,
-    );
-
-    if (gameId === -1) {
-      const msg: ChatResponse = {
-        text: 'You are not in a room!',
-        username: '',
-        timestamp: new Date(),
-        type: ChatResponseType.ERROR,
-      };
-      socket.emit(LobbySocketEvents.ALL_CHAT_TO_CLIENT, msg);
-      return false;
-    }
-
-    await this.roomsService.roomEvent(socket, gameId, event);
-
-    return true;
-  }
-
   @SubscribeMessage(RoomSocketEvents.ROOM_CHAT_TO_SERVER)
   async handleGameChat(socket: SocketUser, chatRequest: ChatRequest) {
     if (chatRequest.text) {
@@ -200,58 +224,56 @@ export class RoomsGateway {
   }
 
   @SubscribeMessage(RoomSocketEvents.LEAVE_ROOM)
-  async handleLeaveGame(socket: SocketUser) {
-    const { gameId } = this.getSocketGameId(socket);
+  async handleLeaveGame(socket: SocketUser, @RoomInfo() roomInfo: IRoomInfo) {
+    await this.roomsService.roomEvent(
+      socket,
+      roomInfo.id,
+      RoomSocketEvents.LEAVE_ROOM,
+    );
 
-    if (this.passRoomEvent(socket, RoomSocketEvents.LEAVE_ROOM, gameId)) {
-      // Leave the socket io room
-      socket.leave(`game:${gameId}`);
+    // Leave the socket io room
+    socket.leave(`game:${roomInfo.id}`);
 
-      // Send message to users
-      const chatResponse = await transformAndValidate(ChatResponse, {
-        text: `${socket.user.displayUsername} has left the room.`,
-        username: socket.user.displayUsername,
-        timestamp: new Date(),
-        type: ChatResponseType.PLAYER_LEAVE_GAME,
-      });
+    // Send message to users
+    const chatResponse = await transformAndValidate(ChatResponse, {
+      text: `${socket.user.displayUsername} has left the room.`,
+      username: socket.user.displayUsername,
+      timestamp: new Date(),
+      type: ChatResponseType.PLAYER_LEAVE_GAME,
+    });
 
-      this.roomsService.storeChat(gameId, chatResponse);
+    this.roomsService.storeChat(roomInfo.id, chatResponse);
 
-      this.server
-        .to(`game:${gameId}`)
-        .emit(RoomSocketEvents.ROOM_CHAT_TO_CLIENT, chatResponse);
-
-      return 'OK';
-    }
-
-    return 'ERROR (user is likely not in a room)';
+    this.server
+      .to(`game:${roomInfo.id}`)
+      .emit(RoomSocketEvents.ROOM_CHAT_TO_CLIENT, chatResponse);
   }
 
   @SubscribeMessage(RoomSocketEvents.SIT_DOWN)
-  async handleSitDown(socket: SocketUser) {
-    if (this.passRoomEvent(socket, RoomSocketEvents.SIT_DOWN)) {
-      return 'OK';
-    }
-
-    return 'ERROR (user is likely not in a room)';
+  async handleSitDown(socket: SocketUser, @RoomInfo() roomInfo: IRoomInfo) {
+    await this.roomsService.roomEvent(
+      socket,
+      roomInfo.id,
+      RoomSocketEvents.SIT_DOWN,
+    );
   }
 
   @SubscribeMessage(RoomSocketEvents.STAND_UP)
-  async handleStandUp(socket: SocketUser) {
-    if (this.passRoomEvent(socket, RoomSocketEvents.STAND_UP)) {
-      return 'OK';
-    }
-
-    return 'ERROR (user is likely not in a room)';
+  async handleStandUp(socket: SocketUser, @RoomInfo() roomInfo: IRoomInfo) {
+    await this.roomsService.roomEvent(
+      socket,
+      roomInfo.id,
+      RoomSocketEvents.STAND_UP,
+    );
   }
 
   // TODO move this to games.gateway.ts later
   @SubscribeMessage(RoomSocketEvents.START_GAME)
-  async handleStartGame(socket: SocketUser) {
-    if (this.passRoomEvent(socket, RoomSocketEvents.START_GAME)) {
-      return 'OK';
-    }
-
-    return 'ERROR (user is likely not in a room)';
+  async handleStartGame(socket: SocketUser, @RoomInfo() roomInfo: IRoomInfo) {
+    await this.roomsService.roomEvent(
+      socket,
+      roomInfo.id,
+      RoomSocketEvents.STAND_UP,
+    );
   }
 }
